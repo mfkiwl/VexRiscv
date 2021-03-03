@@ -179,7 +179,7 @@ sbt "runMain vexriscv.demo.GenSmallest"
 NOTES:
 - It could take time the first time you run it.
 - The VexRiscv project may need an unreleased master-head of the SpinalHDL repo. If it fails to compile, just get the SpinalHDL repository and
-   do a "sbt clean compile publish-local" in it as described in the dependencies chapter.
+   do a "sbt clean compile publishLocal" in it as described in the dependencies chapter.
 
 ## Regression tests
 
@@ -283,7 +283,7 @@ Note that sometimes Eclipse needs to be restarted in order to be able to place n
 
 ## Briey SoC
 As a demonstration, a SoC named Briey is implemented in `src/main/scala/vexriscv/demo/Briey.scala`. This SoC is very similar to
-the [Pinsec SoC](https://spinalhdl.github.io/SpinalDoc/spinal/lib/pinsec/hardware/):
+the [Pinsec SoC](https://spinalhdl.github.io/SpinalDoc-RTD/SpinalHDL/Legacy/pinsec/hardware_toplevel.html#):
 
 ![Briey SoC](assets/brieySoc.png?raw=true "")
 
@@ -296,7 +296,7 @@ sbt "runMain vexriscv.demo.Briey"
 To run the verilator simulation of the Briey SoC, which can then be connected to OpenOCD/GDB, first get these dependencies:
 
 ```sh
-sudo apt-get install build-essential xorg-dev libudev-dev libts-dev libgl1-mesa-dev libglu1-mesa-dev libasound2-dev libpulse-dev libopenal-dev libogg-dev libvorbis-dev libaudiofile-dev libpng12-dev libfreetype6-dev libusb-dev libdbus-1-dev zlib1g-dev libdirectfb-dev libsdl2-dev
+sudo apt-get install build-essential xorg-dev libudev-dev libgl1-mesa-dev libglu1-mesa-dev libasound2-dev libpulse-dev libopenal-dev libogg-dev libvorbis-dev libaudiofile-dev libpng12-dev libfreetype6-dev libusb-dev libdbus-1-dev zlib1g-dev libdirectfb-dev libsdl2-dev
 ```
 
 Then go in `src/test/cpp/briey` and run the simulation with (UART TX is printed in the terminal, VGA is displayed in a GUI):
@@ -412,15 +412,15 @@ Note that VexRiscv can run Linux on both cache full and cache less design.
 
 A prebuild GCC toolsuite can be found here:
 
-- https://www.sifive.com/products/tools/  => SiFive GNU Embedded Toolchain
+- https://www.sifive.com/software/  => Prebuilt RISC‑V GCC Toolchain and Emulator
 
 The VexRiscvSocSoftware makefiles are expecting to find this prebuild version in /opt/riscv/__contentOfThisPreBuild__
 
 ```sh
-wget https://static.dev.sifive.com/dev-tools/riscv64-unknown-elf-gcc-20171231-x86_64-linux-centos6.tar.gz
-tar -xzvf riscv64-unknown-elf-gcc-20171231-x86_64-linux-centos6.tar.gz
-sudo mv riscv64-unknown-elf-gcc-20171231-x86_64-linux-centos6 /opt/riscv64-unknown-elf-gcc-20171231-x86_64-linux-centos6
-sudo mv /opt/riscv64-unknown-elf-gcc-20171231-x86_64-linux-centos6 /opt/riscv
+version=riscv64-unknown-elf-gcc-8.3.0-2019.08.0-x86_64-linux-ubuntu14
+wget -O riscv64-unknown-elf-gcc.tar.gz riscv https://static.dev.sifive.com/dev-tools/$version.tar.gz
+tar -xzvf riscv64-unknown-elf-gcc.tar.gz
+sudo mv $version /opt/riscv
 echo 'export PATH=/opt/riscv/bin:$PATH' >> ~/.bashrc
 ```
 

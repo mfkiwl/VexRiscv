@@ -17,6 +17,7 @@ trait IBusFetcher{
   def pcValid(stage : Stage) : Bool
   def getInjectionPort() : Stream[Bits]
   def withRvc() : Boolean
+  def forceNoDecode() : Unit
 }
 
 
@@ -24,6 +25,7 @@ trait DecoderService{
   def add(key : MaskedLiteral,values : Seq[(Stageable[_ <: BaseType],Any)])
   def add(encoding :Seq[(MaskedLiteral,Seq[(Stageable[_ <: BaseType],Any)])])
   def addDefault(key : Stageable[_ <: BaseType], value : Any)
+  def forceIllegal() : Unit
 }
 
 case class ExceptionCause(codeWidth : Int) extends Bundle{

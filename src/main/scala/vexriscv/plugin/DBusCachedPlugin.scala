@@ -295,7 +295,7 @@ class DBusCachedPlugin(val config : DataCacheConfig,
 
     pipeline plug new Area{
       //Memory bandwidth counter
-      val rspCounter = RegInit(UInt(32 bits)) init(0)
+      val rspCounter = Reg(UInt(32 bits)) init(0)
       when(dBus.rsp.valid){
         rspCounter := rspCounter + 1
       }
@@ -395,6 +395,7 @@ class DBusCachedPlugin(val config : DataCacheConfig,
       import managementStage._
       cache.io.cpu.writeBack.isValid := arbitration.isValid && input(MEMORY_ENABLE)
       cache.io.cpu.writeBack.isStuck := arbitration.isStuck
+      cache.io.cpu.writeBack.isFiring := arbitration.isFiring
       cache.io.cpu.writeBack.isUser  := (if(privilegeService != null) privilegeService.isUser() else False)
       cache.io.cpu.writeBack.address := U(input(REGFILE_WRITE_DATA))
       cache.io.cpu.writeBack.storeData.subdivideIn(32 bits).foreach(_ := input(MEMORY_STORE_DATA_RF))

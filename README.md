@@ -182,7 +182,7 @@ unsetenv VERILATOR_ROOT  # For csh; ignore error if on bash
 unset VERILATOR_ROOT  # For bash
 cd verilator
 git pull        # Make sure we're up-to-date
-git checkout v4.040
+git checkout v4.216
 autoconf        # Create ./configure script
 ./configure
 make
@@ -749,6 +749,12 @@ Fpu 64/32 bits ->
   Artix 7 relaxed -> 101 Mhz 3336 LUT 3033 FF 
   Artix 7 FMax    -> 165 Mhz 3728 LUT 3175 FF 
 ```
+
+Note that if you want to debug FPU code via the openocd_riscv.vexriscv target, you need to use the GDB from : 
+
+https://static.dev.sifive.com/dev-tools/riscv64-unknown-elf-gcc-20171231-x86_64-linux-centos6.tar.gz
+
+More recent versions of gdb will not detect the FPU. Also, the openocd_riscv.vexriscv can't read CSR/FPU registers, so to have visibility on the floating points values, you need to compile your code in -O0, which will force values to be stored in memory (and so, be visible)
 
 ### Plugins
 

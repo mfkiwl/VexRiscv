@@ -530,7 +530,7 @@ case class FpuCore( portCount : Int, p : FpuParameter) extends Component{
           busy := True
           when(boot){
             when(input.i2f && !patched && input.value(31) && input.arg(0)){
-              input.value.getDrivingReg(0, 32 bits) := B(input.value.asUInt.twoComplement(True).resize(32 bits))
+              input.value.getDrivingReg()(0, 32 bits) := B(input.value.asUInt.twoComplement(True).resize(32 bits))
               patched := True
             } otherwise {
               shift.by := OHToUInt(OHMasking.first((ohInput).reversed))
@@ -1318,7 +1318,7 @@ case class FpuCore( portCount : Int, p : FpuParameter) extends Component{
       is(_15_XYY2){
         when(mulBuffer.valid) {
           state := Y_15_XYY2
-          mulBuffer.payload.getDrivingReg := (U"11" << mulWidth-2) - (mulBuffer.payload)
+          mulBuffer.payload.getDrivingReg() := (U"11" << mulWidth-2) - (mulBuffer.payload)
         }
       }
       is(Y_15_XYY2){
@@ -1546,16 +1546,23 @@ case class FpuCore( portCount : Int, p : FpuParameter) extends Component{
     val manAggregate = input.value.mantissa @@ input.scrap
     val expBase = muxDouble[UInt](input.format)(exponentF64Subnormal + 1)(exponentF32Subnormal + 1)
     val expDif = expBase -^ input.value.exponent
-    val expSubnormal = !expDif.msb
-    var discardCount = (expSubnormal ? expDif.resize(log2Up(p.internalMantissaSize) bits) | U(0))
+    val expSubnormal = !input.value.special && !expDif.msb
+    var discardCount = (expSubnormal ? expDif | U(0))
     if (p.withDouble) when(input.format === FpuFormat.FLOAT) {
       discardCount \= discardCount + 29
     }
-    val exactMask = (List(True) ++ (0 until p.internalMantissaSize + 1).map(_ < discardCount)).asBits.asUInt
-    val roundAdjusted = (True ## (manAggregate >> 1)) (discardCount) ## ((manAggregate & exactMask) =/= 0)
+    val discardCountTrunk = discardCount.resize(log2Up(p.internalMantissaSize) bits)
+    val exactMask = (List(True) ++ (0 until p.internalMantissaSize + 1).map(_ < discardCountTrunk)).asBits.asUInt
+    val roundAdjusted = (True ## (manAggregate >> 1)) (discardCountTrunk) ## ((manAggregate & exactMask) =/= 0)
+    val rneBit = CombInit((U"01" ## (manAggregate >> 2))(discardCountTrunk))
 
+    when(discardCount >= widthOf(manAggregate)){
+      rneBit := False
+      roundAdjusted(1) := False
+      exactMask := exactMask.maxValue
+    }
     val mantissaIncrement = !input.value.special && input.roundMode.mux(
-      FpuRoundMode.RNE -> (roundAdjusted(1) && (roundAdjusted(0) || (U"01" ## (manAggregate >> 2)) (discardCount))),
+      FpuRoundMode.RNE -> (roundAdjusted(1) && (roundAdjusted(0) || rneBit)),
       FpuRoundMode.RTZ -> False,
       FpuRoundMode.RDN -> (roundAdjusted =/= 0 && input.value.sign),
       FpuRoundMode.RUP -> (roundAdjusted =/= 0 && !input.value.sign),
@@ -1577,10 +1584,11 @@ case class FpuCore( portCount : Int, p : FpuParameter) extends Component{
     val adderMantissa = input.value.mantissa(mantissaRange) & (mantissaIncrement ? ~(exactMask.trim(1) >> 1) | input.value.mantissa(mantissaRange).maxValue)
     val adderRightOp = (mantissaIncrement ? (exactMask >> 1)| U(0)).resize(p.internalMantissaSize bits)
     val adder = KeepAttribute(KeepAttribute(input.value.exponent @@ adderMantissa) + KeepAttribute(adderRightOp) + KeepAttribute(U(mantissaIncrement)))
+    val masked = adder & ~((exactMask >> 1).resize(p.internalMantissaSize).resize(widthOf(adder)))
     math.special := input.value.special
     math.sign := input.value.sign
-    math.exponent := adder(p.internalMantissaSize, p.internalExponentSize bits)
-    math.mantissa := adder(0, p.internalMantissaSize bits)
+    math.exponent := masked(p.internalMantissaSize, p.internalExponentSize bits)
+    math.mantissa := masked(0, p.internalMantissaSize bits)
 
     val patched = CombInit(math)
     val nx,of,uf = False
@@ -1688,7 +1696,12 @@ case class FpuCore( portCount : Int, p : FpuParameter) extends Component{
     port.valid := input.valid && input.write
     port.address := input.source @@ input.rd
     port.data.value := input.value
-    if(p.withDouble) port.data.boxed := input.format === FpuFormat.FLOAT
+    if(p.withDouble) {
+      port.data.boxed := input.format === FpuFormat.FLOAT
+      when(port.data.boxed){
+        port.data.value.mantissa(p.internalMantissaSize-23-1 downto 0) := 0
+      }
+    }
 
     val randomSim = p.sim generate (in UInt(p.internalMantissaSize bits))
     if(p.sim) when(port.data.value.isZero || port.data.value.isInfinity){
@@ -1745,17 +1758,17 @@ object FpuSynthesisBench extends App{
   }
 
 //    rotate2_24 ->
-//    Artix 7 -> 233 Mhz 96 LUT 167 FF
-//  Artix 7 -> 420 Mhz 86 LUT 229 FF
+//    Artix 7 -> 233 MHz 96 LUT 167 FF
+//  Artix 7 -> 420 MHz 86 LUT 229 FF
 //  rotate2_32 ->
-//    Artix 7 -> 222 Mhz 108 LUT 238 FF
-//  Artix 7 -> 399 Mhz 110 LUT 300 FF
+//    Artix 7 -> 222 MHz 108 LUT 238 FF
+//  Artix 7 -> 399 MHz 110 LUT 300 FF
 //  rotate2_52 ->
-//    Artix 7 -> 195 Mhz 230 LUT 362 FF
-//  Artix 7 -> 366 Mhz 225 LUT 486 FF
+//    Artix 7 -> 195 MHz 230 LUT 362 FF
+//  Artix 7 -> 366 MHz 225 LUT 486 FF
 //  rotate2_64 ->
-//    Artix 7 -> 182 Mhz 257 LUT 465 FF
-//  Artix 7 -> 359 Mhz 266 LUT 591 FF
+//    Artix 7 -> 182 MHz 257 LUT 465 FF
+//  Artix 7 -> 359 MHz 266 LUT 591 FF
   class Rotate2(width : Int) extends Rtl{
     override def getName(): String = "rotate2_" + width
     override def getRtlPath(): String = getName() + ".v"
@@ -1845,56 +1858,56 @@ object FpuSynthesisBench extends App{
 }
 
 //Fpu_32 ->
-//Artix 7 -> 136 Mhz 1471 LUT 1336 FF
-//Artix 7 -> 196 Mhz 1687 LUT 1371 FF
+//Artix 7 -> 136 MHz 1471 LUT 1336 FF
+//Artix 7 -> 196 MHz 1687 LUT 1371 FF
 //Fpu_64 ->
-//Artix 7 -> 105 Mhz 2822 LUT 2132 FF
-//Artix 7 -> 161 Mhz 3114 LUT 2272 FF
+//Artix 7 -> 105 MHz 2822 LUT 2132 FF
+//Artix 7 -> 161 MHz 3114 LUT 2272 FF
 //
 //
 //
 //Fpu_32 ->
-//Artix 7 -> 128 Mhz 1693 LUT 1481 FF
-//Artix 7 -> 203 Mhz 1895 LUT 1481 FF
+//Artix 7 -> 128 MHz 1693 LUT 1481 FF
+//Artix 7 -> 203 MHz 1895 LUT 1481 FF
 //Fpu_64 ->
-//Artix 7 -> 99 Mhz 3073 LUT 2396 FF
-//Artix 7 -> 164 Mhz 3433 LUT 2432 FF
+//Artix 7 -> 99 MHz 3073 LUT 2396 FF
+//Artix 7 -> 164 MHz 3433 LUT 2432 FF
 
 
 //Fpu_32 ->
-//Artix 7 -> 112 Mhz 1790 LUT 1666 FF
-//Artix 7 -> 158 Mhz 1989 LUT 1701 FF
+//Artix 7 -> 112 MHz 1790 LUT 1666 FF
+//Artix 7 -> 158 MHz 1989 LUT 1701 FF
 //Fpu_64 ->
-//Artix 7 -> 100 Mhz 3294 LUT 2763 FF
-//Artix 7 -> 151 Mhz 3708 LUT 2904 FF
+//Artix 7 -> 100 MHz 3294 LUT 2763 FF
+//Artix 7 -> 151 MHz 3708 LUT 2904 FF
 
 //Fpu_32 ->
-//Artix 7 -> 139 Mhz 1879 LUT 1713 FF
-//Artix 7 -> 206 Mhz 2135 LUT 1723 FF
+//Artix 7 -> 139 MHz 1879 LUT 1713 FF
+//Artix 7 -> 206 MHz 2135 LUT 1723 FF
 //Fpu_64 ->
-//Artix 7 -> 106 Mhz 3502 LUT 2811 FF
-//Artix 7 -> 163 Mhz 3905 LUT 2951 FF
+//Artix 7 -> 106 MHz 3502 LUT 2811 FF
+//Artix 7 -> 163 MHz 3905 LUT 2951 FF
 
 //Fpu_32 ->
-//Artix 7 -> 130 Mhz 1889 LUT 1835 FF
-//Artix 7 -> 210 Mhz 2131 LUT 1845 FF
+//Artix 7 -> 130 MHz 1889 LUT 1835 FF
+//Artix 7 -> 210 MHz 2131 LUT 1845 FF
 //Fpu_64 ->
-//Artix 7 -> 106 Mhz 3322 LUT 3023 FF
-//Artix 7 -> 161 Mhz 3675 LUT 3163 FF
+//Artix 7 -> 106 MHz 3322 LUT 3023 FF
+//Artix 7 -> 161 MHz 3675 LUT 3163 FF
 
 //Fpu_32 ->
-//Artix 7 -> 132 Mhz 1891 LUT 1837 FF
-//Artix 7 -> 209 Mhz 2132 LUT 1847 FF
+//Artix 7 -> 132 MHz 1891 LUT 1837 FF
+//Artix 7 -> 209 MHz 2132 LUT 1847 FF
 //Fpu_64 ->
-//Artix 7 -> 105 Mhz 3348 LUT 3024 FF
-//Artix 7 -> 162 Mhz 3712 LUT 3165 FF
+//Artix 7 -> 105 MHz 3348 LUT 3024 FF
+//Artix 7 -> 162 MHz 3712 LUT 3165 FF
 
 //Fpu_32 ->
-//Artix 7 -> 128 Mhz 1796 LUT 1727 FF
-//Artix 7 -> 208 Mhz 2049 LUT 1727 FF
+//Artix 7 -> 128 MHz 1796 LUT 1727 FF
+//Artix 7 -> 208 MHz 2049 LUT 1727 FF
 //Fpu_64 ->
-//Artix 7 -> 109 Mhz 3417 LUT 2913 FF
-//Artix 7 -> 168 Mhz 3844 LUT 3053 FF
+//Artix 7 -> 109 MHz 3417 LUT 2913 FF
+//Artix 7 -> 168 MHz 3844 LUT 3053 FF
 
 /*
 testfloat  -tininessafter -all1 > all1.txt

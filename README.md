@@ -44,7 +44,9 @@
     - [StaticMemoryTranslatorPlugin](#staticmemorytranslatorplugin)
     - [MmuPlugin](#mmuplugin)
     - [PmpPlugin](#pmpplugin)
+      - [PmpPluginNapot](#pmppluginnapot)
     - [DebugPlugin](#debugplugin)
+    - [EmbeddedRiscvJtag](#embeddedRiscvJtag)
     - [YamlPlugin](#yamlplugin)
     - [FpuPlugin](#fpuplugin)
     - [AesPlugin](#aesplugin)
@@ -57,7 +59,7 @@ This repository hosts a RISC-V implementation written in SpinalHDL. Here are som
 
 - RV32I[M][A][F[D]][C] instruction set
 - Pipelined from 2 to 5+ stages ([Fetch*X], Decode, Execute, [Memory], [WriteBack])
-- 1.44 DMIPS/Mhz --no-inline when nearly all features are enabled (1.57 DMIPS/Mhz when the divider lookup table is enabled)
+- 1.44 DMIPS/MHz --no-inline when nearly all features are enabled (1.57 DMIPS/MHz when the divider lookup table is enabled)
 - Optimized for FPGA, does not use any vendor specific IP block / primitive
 - AXI4, Avalon, wishbone ready
 - Optional MUL/DIV extensions
@@ -71,6 +73,7 @@ This repository hosts a RISC-V implementation written in SpinalHDL. Here are som
 - Linux compatible (SoC : https://github.com/enjoy-digital/linux-on-litex-vexriscv)
 - Zephyr compatible
 - [FreeRTOS port](https://github.com/Dolu1990/FreeRTOS-RISCV)
+- Support tightly coupled memory on I$ D$ (see GenFullWithTcm / GenFullWithTcmIntegrated)
 
 The hardware description of this CPU is done by using a very software oriented approach
 (without any overhead in the generated hardware). Here is a list of software concepts used:
@@ -84,6 +87,8 @@ There is a gitter channel for all questions about VexRiscv :<br>
 
 For commercial support, please contact spinalhdl@gmail.com.
 
+Note you may be interested VexiiRiscv (https://github.com/SpinalHDL/VexiiRiscv).
+
 ## Area usage and maximal frequency
 
 The following numbers were obtained by synthesizing the CPU as toplevel on the fastest speed grade without any specific synthesis options to save area or to get better maximal frequency (neutral).<br>
@@ -94,54 +99,54 @@ dhrystone binaries which fit inside a 4KB I$ and 4KB D$ (I already had this case
 The CPU configurations used below can be found in the `src/scala/vexriscv/demo` directory.
 
 ```
-VexRiscv small (RV32I, 0.52 DMIPS/Mhz, no datapath bypass, no interrupt) ->
-    Artix 7     -> 243 Mhz 504 LUT 505 FF 
-    Cyclone V   -> 174 Mhz 352 ALMs
-    Cyclone IV  -> 179 Mhz 731 LUT 494 FF 
-    iCE40       -> 92 Mhz 1130 LC
+VexRiscv small (RV32I, 0.52 DMIPS/MHz, no datapath bypass, no interrupt) ->
+    Artix 7     -> 243 MHz 504 LUT 505 FF 
+    Cyclone V   -> 174 MHz 352 ALMs
+    Cyclone IV  -> 179 MHz 731 LUT 494 FF 
+    iCE40       -> 92 MHz 1130 LC
 
-VexRiscv small (RV32I, 0.52 DMIPS/Mhz, no datapath bypass) ->
-    Artix 7     -> 240 Mhz 556 LUT 566 FF 
-    Cyclone V   -> 194 Mhz 394 ALMs
-    Cyclone IV  -> 174 Mhz 831 LUT 555 FF 
-    iCE40       -> 85 Mhz 1292 LC
+VexRiscv small (RV32I, 0.52 DMIPS/MHz, no datapath bypass) ->
+    Artix 7     -> 240 MHz 556 LUT 566 FF 
+    Cyclone V   -> 194 MHz 394 ALMs
+    Cyclone IV  -> 174 MHz 831 LUT 555 FF 
+    iCE40       -> 85 MHz 1292 LC
 
-VexRiscv small and productive (RV32I, 0.82 DMIPS/Mhz)  ->
-    Artix 7     -> 232 Mhz 816 LUT 534 FF 
-    Cyclone V   -> 155 Mhz 492 ALMs
-    Cyclone IV  -> 155 Mhz 1,111 LUT 530 FF 
-    iCE40       -> 63 Mhz 1596 LC
+VexRiscv small and productive (RV32I, 0.82 DMIPS/MHz)  ->
+    Artix 7     -> 232 MHz 816 LUT 534 FF 
+    Cyclone V   -> 155 MHz 492 ALMs
+    Cyclone IV  -> 155 MHz 1,111 LUT 530 FF 
+    iCE40       -> 63 MHz 1596 LC
 
-VexRiscv small and productive with I$ (RV32I, 0.70 DMIPS/Mhz, 4KB-I$)  ->
-    Artix 7     -> 220 Mhz 730 LUT 570 FF 
-    Cyclone V   -> 142 Mhz 501 ALMs
-    Cyclone IV  -> 150 Mhz 1,139 LUT 536 FF 
-    iCE40       -> 66 Mhz 1680 LC
+VexRiscv small and productive with I$ (RV32I, 0.70 DMIPS/MHz, 4KB-I$)  ->
+    Artix 7     -> 220 MHz 730 LUT 570 FF 
+    Cyclone V   -> 142 MHz 501 ALMs
+    Cyclone IV  -> 150 MHz 1,139 LUT 536 FF 
+    iCE40       -> 66 MHz 1680 LC
 
-VexRiscv full no cache (RV32IM, 1.21 DMIPS/Mhz 2.30 Coremark/Mhz, single cycle barrel shifter, debug module, catch exceptions, static branch) ->
-    Artix 7     -> 216 Mhz 1418 LUT 949 FF 
-    Cyclone V   -> 133 Mhz 933 ALMs
-    Cyclone IV  -> 143 Mhz 2,076 LUT 972 FF 
+VexRiscv full no cache (RV32IM, 1.21 DMIPS/MHz 2.30 Coremark/MHz, single cycle barrel shifter, debug module, catch exceptions, static branch) ->
+    Artix 7     -> 216 MHz 1418 LUT 949 FF 
+    Cyclone V   -> 133 MHz 933 ALMs
+    Cyclone IV  -> 143 MHz 2,076 LUT 972 FF 
 
-VexRiscv full (RV32IM, 1.21 DMIPS/Mhz 2.30 Coremark/Mhz with cache trashing, 4KB-I$,4KB-D$, single cycle barrel shifter, debug module, catch exceptions, static branch) ->
-    Artix 7     -> 199 Mhz 1840 LUT 1158 FF 
-    Cyclone V   -> 141 Mhz 1,166 ALMs
-    Cyclone IV  -> 131 Mhz 2,407 LUT 1,067 FF 
+VexRiscv full (RV32IM, 1.21 DMIPS/MHz 2.30 Coremark/MHz with cache trashing, 4KB-I$,4KB-D$, single cycle barrel shifter, debug module, catch exceptions, static branch) ->
+    Artix 7     -> 199 MHz 1840 LUT 1158 FF 
+    Cyclone V   -> 141 MHz 1,166 ALMs
+    Cyclone IV  -> 131 MHz 2,407 LUT 1,067 FF 
 
-VexRiscv full max perf (HZ*IPC) -> (RV32IM, 1.38 DMIPS/Mhz 2.57 Coremark/Mhz, 8KB-I$,8KB-D$, single cycle barrel shifter, debug module, catch exceptions, dynamic branch prediction in the fetch stage, branch and shift operations done in the Execute stage) ->
-    Artix 7     -> 200 Mhz 1935 LUT 1216 FF 
-    Cyclone V   -> 130 Mhz 1,166 ALMs
-    Cyclone IV  -> 126 Mhz 2,484 LUT 1,120 FF 
+VexRiscv full max perf (HZ*IPC) -> (RV32IM, 1.38 DMIPS/MHz 2.57 Coremark/MHz, 8KB-I$,8KB-D$, single cycle barrel shifter, debug module, catch exceptions, dynamic branch prediction in the fetch stage, branch and shift operations done in the Execute stage) ->
+    Artix 7     -> 200 MHz 1935 LUT 1216 FF 
+    Cyclone V   -> 130 MHz 1,166 ALMs
+    Cyclone IV  -> 126 MHz 2,484 LUT 1,120 FF 
 
-VexRiscv full with MMU (RV32IM, 1.24 DMIPS/Mhz 2.35 Coremark/Mhz, with cache trashing, 4KB-I$, 4KB-D$, single cycle barrel shifter, debug module, catch exceptions, dynamic branch, MMU) ->
-    Artix 7     -> 151 Mhz 2021 LUT 1541 FF 
-    Cyclone V   -> 124 Mhz 1,368 ALMs
-    Cyclone IV -> 128 Mhz 2,826 LUT 1,474 FF 
+VexRiscv full with MMU (RV32IM, 1.24 DMIPS/MHz 2.35 Coremark/MHz, with cache trashing, 4KB-I$, 4KB-D$, single cycle barrel shifter, debug module, catch exceptions, dynamic branch, MMU) ->
+    Artix 7     -> 151 MHz 2021 LUT 1541 FF 
+    Cyclone V   -> 124 MHz 1,368 ALMs
+    Cyclone IV -> 128 MHz 2,826 LUT 1,474 FF 
 
-VexRiscv linux balanced (RV32IMA, 1.21 DMIPS/Mhz 2.27 Coremark/Mhz, with cache trashing, 4KB-I$, 4KB-D$, single cycle barrel shifter, catch exceptions, static branch, MMU, Supervisor, Compatible with mainstream linux) ->
-    Artix 7     -> 180 Mhz 2883 LUT 2130 FF 
-    Cyclone V   -> 131 Mhz 1,764 ALMs
-    Cyclone IV  -> 121 Mhz 3,608 LUT 2,082 FF 
+VexRiscv linux balanced (RV32IMA, 1.21 DMIPS/MHz 2.27 Coremark/MHz, with cache trashing, 4KB-I$, 4KB-D$, single cycle barrel shifter, catch exceptions, static branch, MMU, Supervisor, Compatible with mainstream linux) ->
+    Artix 7     -> 180 MHz 2883 LUT 2130 FF 
+    Cyclone V   -> 131 MHz 1,764 ALMs
+    Cyclone IV  -> 121 MHz 3,608 LUT 2,082 FF 
 ```
 
 The following configuration results in 1.44 DMIPS/MHz:
@@ -154,7 +159,7 @@ The following configuration results in 1.44 DMIPS/MHz:
 - single cycle multiplication with bypassing in the WB stage (late result)
 - dynamic branch prediction done in the F stage with a direct mapped target buffer cache (no penalties on correct predictions)
 
-Note that, recently, the capability to remove the Fetch/Memory/WriteBack stage was added to reduce the area of the CPU, which ends up with a smaller CPU and a better DMIPS/Mhz for the small configurations.
+Note that, recently, the capability to remove the Fetch/Memory/WriteBack stage was added to reduce the area of the CPU, which ends up with a smaller CPU and a better DMIPS/MHz for the small configurations.
 
 ## Dependencies
 
@@ -190,9 +195,7 @@ sudo make install
 ```
 
 ## CPU generation
-You can find two example CPU instances in:
-- `src/main/scala/vexriscv/demo/GenFull.scala`
-- `src/main/scala/vexriscv/demo/GenSmallest.scala`
+We now have twenty-two CPU configurations [in this directory](./src/main/scala/vexriscv/demo).  Look at the files called Gen*.scala.  Here is the [full configuration](./src/main/scala/vexriscv/demo/GenFull.scala), and the [smallest configuration](./src/main/scala/vexriscv/demo/GenSmallest.scala). 
 
 To generate the corresponding RTL as a `VexRiscv.v` file, run the following commands in the root directory of this repository:
 
@@ -257,7 +260,12 @@ Also there is a few environnement variable that you can use to modulate the rand
 | VEXRISCV_REGRESSION_CONFIG_DEMW_RATE        | 0.0-1.0            | Chance to generate a config with writeback stage |            
 | VEXRISCV_REGRESSION_CONFIG_DEM_RATE         | 0.0-1.0            | Chance to generate a config with memory stage |            
 
+## Basic Verilator simulation
+
+To run basic simulation with stdout and no tracing, loading a binary directly is supported with the `RUN_HEX` variable of `src/test/cpp/regression/makefile`. This has a significant performance advantage over using GDB over OpenOCD with JTAG over TCP. VCD tracing is supported with the makefile variable `TRACE`.
+
 ## Interactive debug of the simulated CPU via GDB OpenOCD and Verilator
+
 To use this, you just need to use the same command as with running tests, but adding `DEBUG_PLUGIN_EXTERNAL=yes` in the make arguments.
 This works for the `GenFull` configuration, but not for `GenSmallest`, as this configuration has no debug module.
 
@@ -318,7 +326,7 @@ If you want to get more information about how all this JTAG / GDB stuff work, yo
 
 ## Briey SoC
 As a demonstration, a SoC named Briey is implemented in `src/main/scala/vexriscv/demo/Briey.scala`. This SoC is very similar to
-the [Pinsec SoC](https://spinalhdl.github.io/SpinalDoc-RTD/SpinalHDL/Legacy/pinsec/hardware_toplevel.html#):
+the [Pinsec SoC](https://spinalhdl.github.io/SpinalDoc-RTD/v1.3.1/SpinalHDL/Legacy/pinsec/hardware_toplevel.html):
 
 ![Briey SoC](assets/brieySoc.png?raw=true "")
 
@@ -345,17 +353,19 @@ To connect OpenOCD (https://github.com/SpinalHDL/openocd_riscv) to the simulatio
 ```sh
 src/openocd -f tcl/interface/jtag_tcp.cfg -c "set BRIEY_CPU0_YAML /home/spinalvm/Spinal/VexRiscv/cpu0.yaml" -f tcl/target/briey.cfg
 ```
+To connect OpenOCD to Altera FPGAs (Intel VJTAG) see here: https://github.com/SpinalHDL/VexRiscv/tree/master/doc/vjtag
 
 You can find multiple software examples and demos here: <https://github.com/SpinalHDL/VexRiscvSocSoftware/tree/master/projects/briey>
 
 You can find some FPGA projects which instantiate the Briey SoC here (DE1-SoC, DE0-Nano): https://drive.google.com/drive/folders/0B-CqLXDTaMbKZGdJZlZ5THAxRTQ?usp=sharing
 
+
 Here are some measurements of Briey SoC timings and area:
 
 ```
-Artix 7     -> 181 Mhz 3220 LUT 3181 FF 
-Cyclone V   -> 142 Mhz 2,222 ALMs
-Cyclone IV  -> 130 Mhz 4,538 LUT 3,211 FF 
+Artix 7     -> 181 MHz 3220 LUT 3181 FF 
+Cyclone V   -> 142 MHz 2,222 ALMs
+Cyclone IV  -> 130 MHz 4,538 LUT 3,211 FF 
 ```
 
 ## Murax SoC
@@ -371,8 +381,8 @@ Murax is a very light SoC (it fits in an ICE40 FPGA) which can work without any 
 - one UART with tx/rx fifo
 
 Depending on the CPU configuration, on the ICE40-hx8k FPGA with icestorm for synthesis, the full SoC has the following area/performance:
-- RV32I interlocked stages => 51 Mhz, 2387 LC 0.45 DMIPS/Mhz
-- RV32I bypassed stages    => 45 Mhz, 2718 LC 0.65 DMIPS/Mhz
+- RV32I interlocked stages => 51 MHz, 2387 LC 0.45 DMIPS/MHz
+- RV32I bypassed stages    => 45 MHz, 2718 LC 0.65 DMIPS/MHz
 
 Its implementation can be found here: `src/main/scala/vexriscv/demo/Murax.scala`.
 
@@ -407,17 +417,17 @@ You can find multiple software examples and demos here: https://github.com/Spina
 Here are some timing and area measurements of the Murax SoC:
 
 ```
-Murax interlocked stages (0.45 DMIPS/Mhz, 8 bits GPIO) ->
-    Artix 7     -> 216 Mhz 1109 LUT 1201 FF 
-    Cyclone V   -> 182 Mhz 725 ALMs
-    Cyclone IV  -> 147 Mhz 1,551 LUT 1,223 FF 
-    iCE40       ->  64 Mhz 2422 LC (nextpnr)
+Murax interlocked stages (0.45 DMIPS/MHz, 8 bits GPIO) ->
+    Artix 7     -> 216 MHz 1109 LUT 1201 FF 
+    Cyclone V   -> 182 MHz 725 ALMs
+    Cyclone IV  -> 147 MHz 1,551 LUT 1,223 FF 
+    iCE40       ->  64 MHz 2422 LC (nextpnr)
 
-MuraxFast bypassed stages (0.65 DMIPS/Mhz, 8 bits GPIO) ->
-    Artix 7     -> 224 Mhz 1278 LUT 1300 FF 
-    Cyclone V   -> 173 Mhz 867 ALMs
-    Cyclone IV  -> 143 Mhz 1,755 LUT 1,258 FF 
-    iCE40       ->  66 Mhz 2799 LC (nextpnr)
+MuraxFast bypassed stages (0.65 DMIPS/MHz, 8 bits GPIO) ->
+    Artix 7     -> 224 MHz 1278 LUT 1300 FF 
+    Cyclone V   -> 173 MHz 867 ALMs
+    Cyclone IV  -> 143 MHz 1,755 LUT 1,258 FF 
+    iCE40       ->  66 MHz 2799 LC (nextpnr)
 ```
 
 Some scripts to generate the SoC and call the icestorm toolchain can be found here: `scripts/Murax/`
@@ -430,6 +440,69 @@ To run it :
 # This will generate the Murax RTL + run its testbench. You need Verilator 3.9xx installated.
 sbt "test:runMain vexriscv.MuraxSim"
 ```
+
+## Build all above with mill
+
+Mill is a simple tool to build Scala/Java, also fits in off-line environment very well.
+
+Github url is here: https://github.com/com-lihaoyi/mill
+
+Document is here: https://mill-build.com/mill/Intro_to_Mill.html
+
+Download executable mill: 
+
+```sh
+curl --fail -L -o mill https://github.com/com-lihaoyi/mill/releases/download/0.11.6/0.11.6-assembly
+chmod +x mill
+```
+Using mill to generate the corresponding RTL as a `VexRiscv.v` file, run the following commands in the root directory of this repository:
+
+```sh
+./mill VexRiscv.runMain vexriscv.demo.GenFull
+```
+or
+
+```sh
+./mill VexRiscv.runMain vexriscv.demo.GenSmallest
+```
+
+Using mill to run tests (need java, scala, verilator), do :
+
+```sh
+export VEXRISCV_REGRESSION_SEED=42
+export VEXRISCV_REGRESSION_TEST_ID=
+./mill VexRiscv.test.testOnly vexriscv.TestIndividualFeatures
+```
+
+Using mill to generate the Briey SoC Hardware:
+
+```sh
+./mill VexRiscv.runMain vexriscv.demo.Briey
+```
+
+Using mill to generate the Murax SoC Hardware:
+
+```sh
+# To generate the SoC without any content in the ram
+./mill VexRiscv.runMain vexriscv.demo.Murax
+
+# To generate the SoC with a demo program already in ram
+./mill VexRiscv.runMain vexriscv.demo.MuraxWithRamInit
+
+# This will generate the Murax RTL + run its testbench. You need Verilator 3.9xx installated.
+./mill VexRiscv.test.runMain vexriscv.MuraxSim
+```
+
+Mill's IDE supports:
+
+```sh
+# Build Server Protocol (BSP)
+./mill mill.bsp.BSP/install
+
+# IntelliJ IDEA Support
+./mill mill.idea.GenIdea/idea
+```
+
 
 ## Running Linux
 
@@ -449,9 +522,12 @@ A prebuild GCC toolsuite can be found here:
 
 - https://www.sifive.com/software/  => Prebuilt RISC‑V GCC Toolchain and Emulator
 
-The VexRiscvSocSoftware makefiles are expecting to find this prebuild version in /opt/riscv/__contentOfThisPreBuild__
+The VexRiscvSocSoftware makefiles are expecting to find a Sifive GCC toolchain in /opt/riscv/__contentOfThisPreBuild__ .
+
+You can manualy download it via https://static.dev.sifive.com/dev-tools/riscv64-unknown-elf-gcc-8.3.0-2019.08.0-x86_64-linux-ubuntu14.tar.gz
 
 ```sh
+# Download and install the Sifive GCC toolchain
 version=riscv64-unknown-elf-gcc-8.3.0-2019.08.0-x86_64-linux-ubuntu14
 wget -O riscv64-unknown-elf-gcc.tar.gz riscv https://static.dev.sifive.com/dev-tools/$version.tar.gz
 tar -xzvf riscv64-unknown-elf-gcc.tar.gz
@@ -743,11 +819,11 @@ Synthesis results of the FPU itself, without the CPU integration, on the fast sp
 
 ```
 Fpu 32 bits ->
-  Artix 7 relaxed -> 135 Mhz 1786 LUT 1778 FF 
-  Artix 7 FMax    -> 205 Mhz 2101 LUT 1778 FF 
+  Artix 7 relaxed -> 135 MHz 1786 LUT 1778 FF 
+  Artix 7 FMax    -> 205 MHz 2101 LUT 1778 FF 
 Fpu 64/32 bits ->
-  Artix 7 relaxed -> 101 Mhz 3336 LUT 3033 FF 
-  Artix 7 FMax    -> 165 Mhz 3728 LUT 3175 FF 
+  Artix 7 relaxed -> 101 MHz 3336 LUT 3033 FF 
+  Artix 7 FMax    -> 165 MHz 3728 LUT 3175 FF 
 ```
 
 Note that if you want to debug FPU code via the openocd_riscv.vexriscv target, you need to use the GDB from : 
@@ -779,6 +855,7 @@ This chapter describes the currently implemented plugins.
 - [StaticMemoryTranslatorPlugin](#staticmemorytranslatorplugin)
 - [MemoryTranslatorPlugin](#memorytranslatorplugin)
 - [DebugPlugin](#debugplugin)
+- [EmbeddedRiscvJtag](#embeddedRiscvJtag)
 - [YamlPlugin](#yamlplugin)
 - [FpuPlugin](#fpuplugin)
 
@@ -867,6 +944,41 @@ Simple and light multi-way instruction cache.
 | config.catchMemoryTranslationMiss  | Boolean  |  Catch when the MMU miss a TLB |
 
 Note: If you enable the twoCycleRam option and if wayCount is bigger than one, then the register file plugin should be configured to read the regFile in an asynchronous manner.
+
+The memory bus is defined as :
+
+```scala
+case class InstructionCacheMemCmd(p : InstructionCacheConfig) extends Bundle{
+  val address = UInt(p.addressWidth bit)
+  val size = UInt(log2Up(log2Up(p.bytePerLine) + 1) bits)
+}
+
+case class InstructionCacheMemRsp(p : InstructionCacheConfig) extends Bundle{
+  val data = Bits(p.memDataWidth bit)
+  val error = Bool
+}
+
+case class InstructionCacheMemBus(p : InstructionCacheConfig) extends Bundle with IMasterSlave{
+  val cmd = Stream (InstructionCacheMemCmd(p))
+  val rsp = Flow (InstructionCacheMemRsp(p))
+
+  override def asMaster(): Unit = {
+    master(cmd)
+    slave(rsp)
+  }
+}
+```
+
+The address is in byte and aligned to the bytePerLine config, the size will always be equal to log2(bytePerLine). 
+
+Note that the cmd stream transaction need to be consumed before starting to send back some rsp transactions (1 cycle minimal latency)
+
+Some documentation about Stream here : 
+
+https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/stream.html?highlight=stream
+
+Flow are the same as Stream but without ready signal.
+
 
 #### DecoderSimplePlugin
 
@@ -1044,6 +1156,77 @@ There is at least one cycle latency between a cmd and the corresponding rsp. The
 
 Multi way cache implementation with writh-through and allocate on read strategy. (Documentation is WIP)
 
+You can invalidate the whole cache via the 0x500F instruction, and you can invalidate a address range (single line size) via the instruction 0x500F | RS1 << 15 where RS1 should not be X0 and point to one byte of the desired address to invalidate.
+
+
+The memory bus is defined as :
+
+```scala
+case class DataCacheMemCmd(p : DataCacheConfig) extends Bundle{
+  val wr = Bool
+  val uncached = Bool
+  val address = UInt(p.addressWidth bit)
+  val data = Bits(p.cpuDataWidth bits)
+  val mask = Bits(p.cpuDataWidth/8 bits)
+  val size   = UInt(p.sizeWidth bits) //... 1 => 2 bytes ... 2 => 4 bytes ...
+  val exclusive = p.withExclusive generate Bool()
+  val last = Bool
+}
+case class DataCacheMemRsp(p : DataCacheConfig) extends Bundle{
+  val aggregated = UInt(p.aggregationWidth bits)
+  val last = Bool()
+  val data = Bits(p.memDataWidth bit)
+  val error = Bool
+  val exclusive = p.withExclusive generate Bool()
+}
+case class DataCacheInv(p : DataCacheConfig) extends Bundle{
+  val enable = Bool()
+  val address = UInt(p.addressWidth bit)
+}
+case class DataCacheAck(p : DataCacheConfig) extends Bundle{
+  val hit = Bool()
+}
+
+case class DataCacheSync(p : DataCacheConfig) extends Bundle{
+  val aggregated = UInt(p.aggregationWidth bits)
+}
+
+case class DataCacheMemBus(p : DataCacheConfig) extends Bundle with IMasterSlave{
+  val cmd = Stream (DataCacheMemCmd(p))
+  val rsp = Flow (DataCacheMemRsp(p))
+
+  val inv = p.withInvalidate generate Stream(Fragment(DataCacheInv(p)))
+  val ack = p.withInvalidate generate Stream(Fragment(DataCacheAck(p)))
+  val sync = p.withInvalidate generate Stream(DataCacheSync(p))
+
+  override def asMaster(): Unit = {
+    master(cmd)
+    slave(rsp)
+
+    if(p.withInvalidate) {
+      slave(inv)
+      master(ack)
+      slave(sync)
+    }
+  }
+}
+```
+
+If you don't use memory coherency you can ignore the inv/ack/sync streams, also write cmd should not generate any rsp transaction.
+
+As the cache is write through, there is no write burst but only individual write transactions.
+
+The address is in byte and aligned to the bytePerLine config, the size will is encoded as log2(number of bytes in the burst). 
+last should be set only on the last transaction of a burst.
+
+Note that the cmd stream transaction need to be consumed before starting to send back some rsp transactions (1 cycle minimal latency)
+
+Some documentation about Stream here : 
+
+https://spinalhdl.github.io/SpinalDoc-RTD/master/SpinalHDL/Libraries/stream.html?highlight=stream
+
+Flow are the same as Stream but without ready signal.
+
 #### MulPlugin
 
 Implements the multiplication instruction from the RISC-V M extension. Its implementation was done in a FPGA friendly way by using 4 17*17 bit multiplications.
@@ -1123,7 +1306,11 @@ fully associative TLB cache which is refilled automaticaly via a dbus access sha
 
 #### PmpPlugin
 
-This is a physical memory protection (PMP) plugin which conforms to the latest RISC-V privilege specification. PMP is configured by writing two special CSRs: `pmpcfg#` and `pmpaddr#`. The former contains the permissions and addressing modes for four protection regions, and the latter contains the encoded start address for a single region. Since the actual region bounds must be computed from the values written to these registers, writing them takes a few CPU cylces. This delay is necessary in order to centralize all of the decoding logic into a single component. Otherwise, it would have to be duplicated for each region, even though the decoding operation happens only when PMP is reprogrammed (e.g., on some context switches).
+This is a physical memory protection (PMP) plugin which conforms to the v1.12 RISC-V privilege specification, without ePMP (`Smepmp`) extension support. PMP is configured by writing two special CSRs: `pmpcfg#` and `pmpaddr#`. The former contains the permissions and addressing modes for four protection regions, and the latter contains the encoded start address for a single region. Since the actual region bounds must be computed from the values written to these registers, writing them takes a few CPU cylces. This delay is necessary in order to centralize all of the decoding logic into a single component. Otherwise, it would have to be duplicated for each region, even though the decoding operation happens only when PMP is reprogrammed (e.g., on some context switches).
+
+##### PmpPluginNapot
+
+The `PmpPluginNapot` is a specialized PMP implementation, providing only the `NAPOT` (naturally-aligned poser-of-2 regions) addressing mode. It requires fewer resources and has a less significant timing impact compared to the full `PmpPlugin`.
 
 #### DebugPlugin
 
@@ -1183,6 +1370,100 @@ Write Address 0x04 ->
 ```
 
 The OpenOCD port is here: <https://github.com/SpinalHDL/openocd_riscv>
+
+#### EmbeddedRiscvJtag
+
+VexRiscv also support the official RISC-V debug specification (Thanks Efinix for the funding !).
+
+To enable it, you need to add the EmbeddedRiscvJtag to the plugin list : 
+
+```scala
+new EmbeddedRiscvJtag(
+  p = DebugTransportModuleParameter(
+    addressWidth = 7,
+    version      = 1,
+    idle         = 7
+  ),
+  withTunneling = false,
+  withTap = true
+)
+```
+
+And turn on the withPrivilegedDebug option in the CsrPlugin config.
+
+Here is an example of openocd tcl script to connect : 
+
+```tcl
+# ADD HERE YOUR JTAG ADAPTER SETTINGS
+
+set _CHIPNAME riscv
+jtag newtap $_CHIPNAME cpu -irlen 5 -expected-id 0x10002FFF
+
+set _TARGETNAME $_CHIPNAME.cpu
+
+target create $_TARGETNAME.0 riscv -chain-position $_TARGETNAME
+
+init
+halt
+```
+
+A full example can be found in GenFullWithOfficialRiscvDebug.scala
+
+##### Tunneled JTAG
+
+The EmbeddedRiscvJtag plugin can also be used with tunneled JTAG. This allows debugging with the same cable used to configure an FPGA.
+
+This uses an FPGA-specific primitive for JTAG access (e.g. Xilinx BSCANE2):
+```scala
+val xilJtag = BSCANE2(userId = 4) // must be userId = 4
+val jtagClockDomain = ClockDomain(
+  clock = xilJtag.TCK
+)
+```
+
+Then, the EmbeddedRiscvJtag plugin must be configured for tunneling without a TAP. Note, the debug clock domain must have a separate reset from the CPU clock domain.
+
+```scala
+// in plugins
+new EmbeddedRiscvJtag(
+  p = DebugTransportModuleParameter(
+    addressWidth = 7,
+    version      = 1,
+    idle         = 7
+  ),
+  withTunneling = true,
+  withTap = false,
+  debugCd = debugClockDomain,
+  jtagCd = jtagClockDomain
+)
+```
+
+Then connect the EmbeddedRiscvJtag to the FPGA-specific JTAG primitive:
+
+```scala
+for (plugin <- cpuConfig.plugins) plugin match {
+  case plugin: EmbeddedRiscvJtag => {
+    plugin.jtagInstruction <> xilJtag.toJtagTapInstructionCtrl()
+  }
+  case _ =>
+}
+```
+
+Here is an example OpenOCD TCL script to connect on a Xilinx 7-Series FPGA: 
+
+```tcl
+# ADD HERE YOUR JTAG ADAPTER SETTINGS
+
+source [find cpld/xilinx-xc7.cfg]
+set TAP_NAME xc7.tap
+
+set _TARGETNAME cpu
+target create $_TARGETNAME.0 riscv -chain-position $TAP_NAME
+riscv use_bscan_tunnel 6 1
+
+init
+halt
+```
 
 #### YamlPlugin
 

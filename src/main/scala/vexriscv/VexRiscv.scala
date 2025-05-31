@@ -53,6 +53,13 @@ case class VexRiscvConfig(){
     case None => false
   }
 
+  def withSupervisor = find(classOf[CsrPlugin]) match {
+    case Some(x) => x.config.supervisorGen
+    case None => false
+  }
+
+  def FLEN = if(withRvd) 64 else if(withRvf) 32 else 0
+
   //Default Stageables
   object IS_RVC extends Stageable(Bool)
   object BYPASSABLE_EXECUTE_STAGE   extends Stageable(Bool)
@@ -95,6 +102,7 @@ case class VexRiscvConfig(){
   object FORMAL_MEM_RDATA  extends Stageable(Bits(32 bits))
   object FORMAL_MEM_WDATA  extends Stageable(Bits(32 bits))
   object FORMAL_INSTRUCTION extends Stageable(Bits(32 bits))
+  object FORMAL_MODE       extends Stageable(Bits(2 bits))
 
 
   object Src1CtrlEnum extends SpinalEnum(binarySequential){

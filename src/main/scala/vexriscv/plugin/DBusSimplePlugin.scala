@@ -7,7 +7,7 @@ import spinal.lib.bus.amba3.ahblite.{AhbLite3Config, AhbLite3Master}
 import spinal.lib.bus.amba4.axi._
 import spinal.lib.bus.avalon.{AvalonMM, AvalonMMConfig}
 import spinal.lib.bus.bmb.{Bmb, BmbParameter}
-import spinal.lib.bus.wishbone.{Wishbone, WishboneConfig}
+import spinal.lib.bus.wishbone.{AddressGranularity, Wishbone, WishboneConfig}
 import spinal.lib.bus.simple._
 import vexriscv.ip.DataCacheMemCmd
 
@@ -16,6 +16,7 @@ import scala.collection.mutable.ArrayBuffer
 
 case class DBusSimpleCmd() extends Bundle{
   val wr = Bool
+  val mask = Bits(4 bit)
   val address = UInt(32 bits)
   val data = Bits(32 bit)
   val size = UInt(2 bit)
@@ -65,7 +66,8 @@ object DBusSimpleBus{
     tgcWidth = 0,
     tgdWidth = 0,
     useBTE = true,
-    useCTI = true
+    useCTI = true,
+    addressGranularity = AddressGranularity.WORD
   )
 
   def getPipelinedMemoryBusConfig() = PipelinedMemoryBusConfig(
@@ -99,6 +101,13 @@ case class DBusSimpleBus(bigEndian : Boolean = false) extends Bundle with IMaste
   def cmdS2mPipe() : DBusSimpleBus = {
     val s = DBusSimpleBus(bigEndian)
     s.cmd    << this.cmd.s2mPipe()
+    this.rsp := s.rsp
+    s
+  }
+
+  def cmdHalfPipe() : DBusSimpleBus = {
+    val s = DBusSimpleBus(bigEndian)
+    s.cmd << this.cmd.halfPipe()
     this.rsp := s.rsp
     s
   }
@@ -186,19 +195,16 @@ case class DBusSimpleBus(bigEndian : Boolean = false) extends Bundle with IMaste
     bus.CTI :=B"000"
     bus.BTE := "00"
     bus.SEL := genMask(cmdStage).resized
-    when(!cmdStage.wr) {
-      bus.SEL := "1111"
-    }
     bus.WE  := cmdStage.wr
     bus.DAT_MOSI := cmdStage.data
 
-    cmdStage.ready := cmdStage.valid && bus.ACK
+    cmdStage.ready := cmdStage.valid && (bus.ACK || bus.ERR)
     bus.CYC := cmdStage.valid
     bus.STB := cmdStage.valid
 
-    rsp.ready := cmdStage.valid && !bus.WE && bus.ACK
+    rsp.ready := cmdStage.valid && !bus.WE && (bus.ACK || bus.ERR)
     rsp.data  := bus.DAT_MISO
-    rsp.error := False //TODO
+    rsp.error := bus.ERR
     bus
   }
 
@@ -218,34 +224,35 @@ case class DBusSimpleBus(bigEndian : Boolean = false) extends Bundle with IMaste
     bus
   }
 
-  def toAhbLite3Master(avoidWriteToReadHazard : Boolean): AhbLite3Master = {
+  def toAhbLite3Master(avoidWriteToReadHazard : Boolean, withHalfRate : Boolean = true): AhbLite3Master = {
     val bus = AhbLite3Master(DBusSimpleBus.getAhbLite3Config())
-    bus.HADDR     := this.cmd.address
-    bus.HWRITE    := this.cmd.wr
-    bus.HSIZE     := B(this.cmd.size, 3 bits)
+    val cmdBuffer = this.cmd.pipelined(halfRate = withHalfRate)
+    bus.HADDR     := cmdBuffer.address
+    bus.HWRITE    := cmdBuffer.wr
+    bus.HSIZE     := B(cmdBuffer.size, 3 bits)
     bus.HBURST    := 0
     bus.HPROT     := "1111"
-    bus.HTRANS    := this.cmd.valid ## B"0"
+    bus.HTRANS    := cmdBuffer.valid ## B"0"
     bus.HMASTLOCK := False
-    bus.HWDATA    := RegNextWhen(this.cmd.data, bus.HREADY)
-    this.cmd.ready := bus.HREADY
+    bus.HWDATA    := RegNextWhen(cmdBuffer.data, bus.HREADY)
+    cmdBuffer.ready := bus.HREADY
 
-    val pending = RegInit(False) clearWhen(bus.HREADY) setWhen(this.cmd.fire && !this.cmd.wr)
+    val pending = RegInit(False) clearWhen(bus.HREADY) setWhen(cmdBuffer.fire && !cmdBuffer.wr)
     this.rsp.ready := bus.HREADY && pending
     this.rsp.data := bus.HRDATA
     this.rsp.error := bus.HRESP
 
     if(avoidWriteToReadHazard) {
       val writeDataPhase = RegNextWhen(bus.HTRANS === 2 && bus.HWRITE, bus.HREADY) init (False)
-      val potentialHazard = this.cmd.valid && !this.cmd.wr && writeDataPhase
+      val potentialHazard = cmdBuffer.valid && !cmdBuffer.wr && writeDataPhase
       when(potentialHazard) {
         bus.HTRANS := 0
-        this.cmd.ready := False
+        cmdBuffer.ready := False
       }
     }
     bus
   }
-  
+
   def toBmb() : Bmb = {
     val pipelinedMemoryBusConfig = DBusSimpleBus.getBmbParameter()
     val bus = Bmb(pipelinedMemoryBusConfig)
@@ -340,13 +347,13 @@ class DBusSimplePlugin(catchAddressMisaligned : Boolean = false,
 
     decoderService.addDefault(MEMORY_ENABLE, False)
     decoderService.add(
-      (if(onlyLoadWords) List(LW) else List(LB, LH, LW, LBU, LHU, LWU)).map(_ -> loadActions) ++
+      (if(onlyLoadWords) List(LW) else List(LB, LH, LW, LBU, LHU)).map(_ -> loadActions) ++
       List(SB, SH, SW).map(_ -> storeActions)
     )
 
 
     if(withLrSc){
-      List(LB, LH, LW, LBU, LHU, LWU, SB, SH, SW).foreach(e =>
+      List(LB, LH, LW, LBU, LHU, SB, SH, SW).foreach(e =>
         decoderService.add(e, Seq(MEMORY_ATOMIC -> False))
       )
       decoderService.add(
@@ -433,6 +440,7 @@ class DBusSimplePlugin(catchAddressMisaligned : Boolean = false,
 
       //formal
       val formalMask = dBus.genMask(dBus.cmd)
+      dBus.cmd.mask := formalMask
 
       insert(FORMAL_MEM_ADDR) := dBus.cmd.address & U"xFFFFFFFC"
       insert(FORMAL_MEM_WMASK) := (dBus.cmd.valid &&  dBus.cmd.wr) ? formalMask | B"0000"

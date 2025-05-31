@@ -30,6 +30,7 @@ AMO?=no
 NO_STALL?=no
 DEBUG_PLUGIN?=STD
 DEBUG_PLUGIN_EXTERNAL?=no
+RISCV_JTAG?=no
 RUN_HEX=no
 WITH_RISCV_REF=yes
 CUSTOM_SIMD_ADD?=no
@@ -60,6 +61,10 @@ ADDCFLAGS += -CFLAGS -DDBUS_${DBUS}
 ADDCFLAGS += -CFLAGS -DREDO=${REDO}
 ADDCFLAGS += -CFLAGS -pthread
 ADDCFLAGS += -CFLAGS -Wno-unused-result
+ADDCFLAGS += -CFLAGS -Wno-parentheses
+ADDCFLAGS += -CFLAGS -Wno-misleading-indentation
+ADDCFLAGS += -CFLAGS -Wno-catch-value
+ADDCFLAGS += -CFLAGS -Wno-float-conversion
 
 
 
@@ -302,6 +307,16 @@ ifeq ($(DEBUG_PLUGIN_EXTERNAL),yes)
 	ADDCFLAGS += -CFLAGS -DDEBUG_PLUGIN_EXTERNAL
 endif
 
+
+ifeq ($(RISCV_JTAG),yes)
+	ADDCFLAGS += -CFLAGS -DRISCV_JTAG
+endif
+
+ifeq ($(VEXRISCV_JTAG),yes)
+	ADDCFLAGS += -CFLAGS -DVEXRISCV_JTAG
+endif
+
+
 ifeq ($(REF),yes)
 	ADDCFLAGS += -CFLAGS -DREF
 endif
@@ -335,7 +350,7 @@ run: compile
 
 verilate: ${VEXRISCV_FILE}
 	cp ${VEXRISCV_FILE}*.bin . | true
-	verilator -cc  ${VEXRISCV_FILE}  -O3 -CFLAGS -std=c++11 -LDFLAGS -pthread  ${ADDCFLAGS} --gdbbt ${VERILATOR_ARGS} -Wno-UNOPTFLAT -Wno-WIDTH --x-assign unique --exe main.cpp
+	verilator -cc  ${VEXRISCV_FILE}  -O3 -LDFLAGS -pthread ${ADDCFLAGS} --gdbbt ${VERILATOR_ARGS} -Wno-UNOPTFLAT -Wno-WIDTH --x-assign unique --exe main.cpp
  	
 compile: verilate
 	make  -j${THREAD_COUNT} -C obj_dir/ -f VVexRiscv.mk VVexRiscv

@@ -407,7 +407,10 @@ public:
 			uint32_t w : 1;
 			uint32_t x : 1;
 			uint32_t u : 1;
-			uint32_t _dummy : 5;
+			uint32_t g : 1;
+			uint32_t a : 1;
+			uint32_t d : 1;
+			uint32_t _dummy : 2;
 			uint32_t ppn : 22;
 		};
 		struct __attribute__((packed)){
@@ -505,9 +508,9 @@ public:
 			}
 			if(!tlb.u && effectivePrivilege == 0) return true;
 			if( tlb.u && effectivePrivilege == 1 && !status.sum) return true;
-			if(superPage && tlb.ppn0 != 0) return true;
+			if(superPage && tlb.ppn0 != 0 || !tlb.a) return true;
 			if(kind == READ || kind == READ_WRITE) if(!tlb.r && !(status.mxr && tlb.x)) return true;
-			if(kind == WRITE || kind == READ_WRITE) if(!tlb.w) return true;
+			if(kind == WRITE || kind == READ_WRITE) if(!tlb.w || !tlb.d) return true;
 			if(kind == EXECUTE) if(!tlb.x) return true;
 
 			*p = (tlb.ppn1 << 22) | (superPage ? v & 0x3FF000 : tlb.ppn0 << 12) | (v & 0xFFF);
@@ -626,8 +629,14 @@ public:
 		case UTIMEH: *value  = dutRfWriteValue; break;
 		#endif
 
-		default: return true; break;
+		default: {
+            if(csr >= 0x3A0 && csr <= 0x3A3 || csr >= 0x3B0 && csr <= 0x3BF) break; //PMP
+            return true;
+		}break;
 		}
+//        if(csr == MSTATUS || csr == SSTATUS){
+//            printf("READ  %x %x\n", pc, *value);
+//        }
 		return false;
 	}
 
@@ -644,11 +653,14 @@ public:
 
 	virtual bool csrWrite(int32_t csr, uint32_t value){
 		if(((csr >> 8) & 0x3) > privilege) return true;
+//		if(csr == MSTATUS || csr == SSTATUS){
+//		    printf("MIAOU %x %x\n", pc, value);
+//		}
 		switch(csr){
 		case MSTATUS: status.raw = value & 0x7FFFFFFF; break;
 		case MIP: ipSoft = value; break;
 		case MIE: ie.raw = value; break;
-		case MTVEC: mtvec.raw = value; break;
+		case MTVEC: mtvec.raw = value & 0xFFFFFFFC; break;
 		case MCAUSE: mcause.raw = value; break;
 		case MBADADDR: mbadaddr = value; break;
 		case MEPC: mepc = value; break;
@@ -660,7 +672,7 @@ public:
 		case SSTATUS: maskedWrite(status.raw, value, 0xC0133 | STATUS_FS_MASK);  break;
 		case SIP: maskedWrite(ipSoft, value,0x333); break;
 		case SIE: maskedWrite(ie.raw, value,0x333); break;
-		case STVEC: stvec.raw = value; break;
+		case STVEC: stvec.raw = value & 0xFFFFFFFC; break;
 		case SCAUSE: scause.raw = value; break;
 		case STVAL: sbadaddr = value; break;
 		case SEPC: sepc = value; break;
@@ -668,13 +680,20 @@ public:
 		case SATP: satp.raw = value;  break;
 
 		#ifdef RVF
-		case FCSR: fcsr.raw = value & 0x7F; break;
-		case FRM: fcsr.frm = value; break;
-		case FFLAGS: fcsr.flags = value; break;
+		case FCSR: fcsr.raw = value & 0x7F; status.fs = 3; break;
+		case FRM: fcsr.frm = value; status.fs = 3; break;
+		case FFLAGS: fcsr.flags = value; status.fs = 3; break;
 		#endif
 
-		default: ilegalInstruction(); return true; break;
+		default: {
+            if(csr >= 0x3A0 && csr <= 0x3A3 || csr >= 0x3B0 && csr <= 0x3BF) break; //PMP
+            ilegalInstruction();
+            return true;
+		}break;
 		}
+//        if(csr == MSTATUS || csr == SSTATUS){
+//            printf("      %x %x\n", pc, status.raw);
+//        }
 		return false;
 	}
 
@@ -703,8 +722,8 @@ public:
 
 
     uint32_t getPendingInterrupt(){
-    	uint32_t mEnabled = status.mie && privilege == 3 || privilege < 3;
-    	uint32_t sEnabled = status.sie && privilege == 1 || privilege < 1;
+    	uint32_t mEnabled = status.mie && (privilege == 3) || privilege < 3;
+    	uint32_t sEnabled = status.sie && (privilege == 1) || privilege < 1;
 
     	uint32_t masked = getIp().raw & ~mideleg & -mEnabled & ie.raw;
 		if (masked == 0)
@@ -723,8 +742,10 @@ public:
                 masked &= MIP_SSIP;
             else if (masked & MIP_STIP)
                 masked &= MIP_STIP;
-            else
-			  fail();
+            else {
+                cout << "CPU model doesn't has pending interrupt" << endl;
+			    fail();
+            }
 		}
 
 		return masked;
@@ -1951,6 +1972,7 @@ public:
 				if(*data == 0)
 					pass();
 				else
+				    cout << "0xF00FFF20 test asked for failure " << *data << endl;
 					fail();
 				break;
 			case 0xF00FFF24u:
@@ -2481,7 +2503,7 @@ public:
         if(top->dBusAhbLite3_HREADY && dBusAhbLite3_HTRANS == 2 && dBusAhbLite3_HWRITE){
             uint32_t data = top->dBusAhbLite3_HWDATA;
             bool error;
-            ws->dBusAccess(dBusAhbLite3_HADDR, 1, dBusAhbLite3_HSIZE, ((1 << (1 << dBusAhbLite3_HSIZE))-1) << (dBusAhbLite3_HADDR & 0x3),&data,&error);
+            ws->dBusAccess(dBusAhbLite3_HADDR, 1, (1<<dBusAhbLite3_HSIZE),((uint8_t*)&data) + (dBusAhbLite3_HADDR&0x3),&error);
         }
 
         if(top->dBusAhbLite3_HREADY){
@@ -2494,16 +2516,15 @@ public:
 
 	virtual void postCycle(){
 		if(ws->iStall)
-			top->dBusAhbLite3_HREADY = (!ws->iStall || VL_RANDOM_I_WIDTH(7) < 100);
+                    top->dBusAhbLite3_HREADY = (!ws->iStall || VL_RANDOM_I_WIDTH(7) < 100);
 
-        top->dBusAhbLite3_HRDATA = VL_RANDOM_I_WIDTH(32);
-        top->dBusAhbLite3_HRESP = VL_RANDOM_I_WIDTH(1);
+                top->dBusAhbLite3_HRDATA = VL_RANDOM_I_WIDTH(32);
+                top->dBusAhbLite3_HRESP = VL_RANDOM_I_WIDTH(1);
 
 		if(top->dBusAhbLite3_HREADY && dBusAhbLite3_HTRANS == 2 && !dBusAhbLite3_HWRITE){
-
 		    bool error;
-		    ws->dBusAccess(dBusAhbLite3_HADDR, 0, dBusAhbLite3_HSIZE, ((1 << (1 << dBusAhbLite3_HSIZE))-1) << (dBusAhbLite3_HADDR & 0x3),&top->dBusAhbLite3_HRDATA,&error);
-            top->dBusAhbLite3_HRESP  = error;
+		    ws->dBusAccess(dBusAhbLite3_HADDR, 0, (1<<dBusAhbLite3_HSIZE),((uint8_t*)&top->dBusAhbLite3_HRDATA) + (dBusAhbLite3_HADDR&0x3),&error);
+		    top->dBusAhbLite3_HRESP  = error;
 		}
 	}
 };
@@ -3071,6 +3092,33 @@ public:
 
 #endif
 
+#include "jtag.h"
+
+#ifdef VEXRISCV_JTAG
+class VexRiscvJtag : public SimElement{
+public:
+	Workspace *ws;
+	VVexRiscv* top;
+
+	VexRiscvJtag(Workspace* ws){
+		this->ws = ws;
+		this->top = ws->top;
+	}
+
+	virtual void onReset(){
+	    top->debugReset = 1;
+	}
+
+	virtual void preCycle(){
+
+	}
+
+	virtual void postCycle(){
+        top->debugReset = 0;
+	}
+};
+#endif
+
 void Workspace::fillSimELements(){
 	#ifdef IBUS_SIMPLE
 		simElements.push_back(new IBusSimple(this));
@@ -3121,6 +3169,14 @@ void Workspace::fillSimELements(){
 	#ifdef DEBUG_PLUGIN_AVALON
 		simElements.push_back(new DebugPluginAvalon(this));
 	#endif
+	#ifdef RISCV_JTAG
+		simElements.push_back(new Jtag(&top->jtag_tms, &top->jtag_tdi, &top->jtag_tdo, &top->jtag_tck, 4));
+        simElements.push_back(new VexRiscvJtag(this));
+	#endif
+    #ifdef VEXRISCV_JTAG
+        simElements.push_back(new Jtag(&top->jtag_tms, &top->jtag_tdi, &top->jtag_tdo, &top->jtag_tck, 4));
+        simElements.push_back(new VexRiscvJtag(this));
+    #endif
 }
 
 mutex Workspace::staticMutex;
@@ -3284,6 +3340,9 @@ public:
 		loadHex(string(REGRESSION_PATH) + "../../resources/hex/" + name + ".elf.hex");
 		out32.open (name + ".out32");
 		this->name = name;
+		if(name == "C.ADDI16SP" || name == "C.ADDI4SPN"){
+    		top->VexRiscv->RegFilePlugin_regFile[2] = 0;
+		}
 	}
 
 
@@ -3323,9 +3382,10 @@ public:
     	fread(log, 1, logSize, logFile);
     	fclose(logFile);
 
-    	if(refSize > logSize || memcmp(log,ref,refSize))
+    	if(refSize > logSize || memcmp(log,ref,refSize)){
+    	    cout << "Bad compliance check" << endl;
     		fail();
-		else
+		} else
 			Workspace::pass();
 	}
 };
@@ -4126,16 +4186,7 @@ int main(int argc, char **argv, char **env) {
 
 
 
-    #ifdef RVF
-    for(const string &name : riscvTestFloat){
-        redo(REDO,RiscvTest(name).withRiscvRef()->bootAt(0x80000188u)->writeWord(0x80000184u, 0x00305073)->run();)
-    }
-    #endif
-    #ifdef RVD
-    for(const string &name : riscvTestDouble){
-        redo(REDO,RiscvTest(name).withRiscvRef()->bootAt(0x80000188u)->writeWord(0x80000184u, 0x00305073)->run();)
-    }
-    #endif
+
     //return 0;
 
 //#ifdef LITEX
@@ -4364,6 +4415,17 @@ int main(int argc, char **argv, char **env) {
 		#ifdef AMO
 			redo(REDO,WorkspaceRegression("amo").withRiscvRef()->loadHex(string(REGRESSION_PATH) + "../raw/amo/build/amo.hex")->bootAt(0x00000000u)->run(10e3););
 		#endif
+
+        #ifdef RVF
+        for(const string &name : riscvTestFloat){
+            redo(REDO,RiscvTest(name).withRiscvRef()->bootAt(0x80000188u)->writeWord(0x80000184u, 0x00305073)->run();)
+        }
+        #endif
+        #ifdef RVD
+        for(const string &name : riscvTestDouble){
+            redo(REDO,RiscvTest(name).withRiscvRef()->bootAt(0x80000188u)->writeWord(0x80000184u, 0x00305073)->run();)
+        }
+        #endif
 
 		#ifdef DHRYSTONE
 			Dhrystone("dhrystoneO3_Stall","dhrystoneO3",true,true).run(1.5e6);

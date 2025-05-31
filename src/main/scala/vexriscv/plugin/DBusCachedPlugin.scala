@@ -5,6 +5,8 @@ import vexriscv._
 import spinal.core._
 import spinal.lib._
 import spinal.lib.bus.amba4.axi.Axi4
+import spinal.lib.bus.misc.SizeMapping
+import spinal.lib.misc.HexTools
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -27,13 +29,32 @@ trait DBusEncodingService {
   def loadData() : Bits
 }
 
+
+case class TightlyCoupledDataBus() extends Bundle with IMasterSlave {
+  val enable = Bool()
+  val address = UInt(32 bits)
+  val write_enable = Bool()
+  val write_data = Bits(32 bits)
+  val write_mask = Bits(4 bits)
+  val read_data = Bits(32 bits)
+
+  override def asMaster(): Unit = {
+    out(enable, address, write_enable, write_data, write_mask)
+    in(read_data)
+  }
+}
+
+case class TightlyCoupledDataPortParameter(name : String, hit : UInt => Bool)
+case class TightlyCoupledDataPort(p : TightlyCoupledDataPortParameter, var bus : TightlyCoupledDataBus)
+
 class DBusCachedPlugin(val config : DataCacheConfig,
                        memoryTranslatorPortConfig : Any = null,
-                       dBusCmdMasterPipe : Boolean = false,
+                       var dBusCmdMasterPipe : Boolean = false,
                        dBusCmdSlavePipe : Boolean = false,
                        dBusRspSlavePipe : Boolean = false,
                        relaxedMemoryTranslationRegister : Boolean = false,
-                       csrInfo : Boolean = false)  extends Plugin[VexRiscv] with DBusAccessService with DBusEncodingService with VexRiscvRegressionArg {
+                       csrInfo : Boolean = false,
+                       tightlyCoupledAddressStage : Boolean = false)  extends Plugin[VexRiscv] with DBusAccessService with DBusEncodingService with VexRiscvRegressionArg {
   import config._
   assert(!(config.withExternalAmo && !dBusRspSlavePipe))
   assert(isPow2(cacheSize))
@@ -44,6 +65,7 @@ class DBusCachedPlugin(val config : DataCacheConfig,
   var exceptionBus : Flow[ExceptionCause] = null
   var privilegeService : PrivilegeService = null
   var redoBranch : Flow[UInt] = null
+  var writesPending : Bool = null
 
   @dontName var dBusAccess : DBusAccess = null
   override def newDBusAccess(): DBusAccess = {
@@ -63,6 +85,20 @@ class DBusCachedPlugin(val config : DataCacheConfig,
     args
   }
 
+  val tightlyCoupledPorts = ArrayBuffer[TightlyCoupledDataPort]()
+  def tightlyGen = tightlyCoupledPorts.nonEmpty
+
+  def newTightlyCoupledPort(p: TightlyCoupledDataPortParameter) = {
+    val port = TightlyCoupledDataPort(p, null)
+    tightlyCoupledPorts += port
+    this
+  }
+
+  def newTightlyCoupledPort(mapping : UInt => Bool) = {
+    val port = TightlyCoupledDataPort(TightlyCoupledDataPortParameter(null, mapping), TightlyCoupledDataBus())
+    tightlyCoupledPorts += port
+    port.bus
+  }
 
   override def addLoadWordEncoding(key : MaskedLiteral): Unit = {
     val decoderService = pipeline.service(classOf[DecoderService])
@@ -127,9 +163,12 @@ class DBusCachedPlugin(val config : DataCacheConfig,
   object MEMORY_ENABLE extends Stageable(Bool)
   object MEMORY_MANAGMENT extends Stageable(Bool)
   object MEMORY_WR extends Stageable(Bool)
+  object MEMORY_TIGHTLY extends Stageable(Bits(tightlyCoupledPorts.size bits))
+  object MEMORY_TIGHTLY_DATA extends Stageable(Bits(32 bits))
   object MEMORY_LRSC extends Stageable(Bool)
   object MEMORY_AMO extends Stageable(Bool)
   object MEMORY_FENCE extends Stageable(Bool)
+  object MEMORY_FENCE_WR extends Stageable(Bool)
   object MEMORY_FORCE_CONSTISTENCY extends Stageable(Bool)
   object IS_DBUS_SHARING extends Stageable(Bool())
   object MEMORY_VIRTUAL_ADDRESS extends Stageable(UInt(32 bits))
@@ -140,6 +179,9 @@ class DBusCachedPlugin(val config : DataCacheConfig,
   override def setup(pipeline: VexRiscv): Unit = {
     import Riscv._
     import pipeline.config._
+
+
+    tightlyCoupledPorts.filter(_.bus == null).foreach(p => p.bus = master(TightlyCoupledDataBus()).setName(p.p.name))
 
     dBus = master(DataCacheMemBus(this.config)).setName("dBus")
 
@@ -171,12 +213,12 @@ class DBusCachedPlugin(val config : DataCacheConfig,
 
     decoderService.addDefault(MEMORY_ENABLE, False)
     decoderService.add(
-      List(LB, LH, LW, LBU, LHU, LWU).map(_ -> loadActions) ++
+      List(LB, LH, LW, LBU, LHU).map(_ -> loadActions) ++
       List(SB, SH, SW).map(_ -> storeActions)
     )
 
     if(withLrSc){
-      List(LB, LH, LW, LBU, LHU, LWU, SB, SH, SW).foreach(e =>
+      List(LB, LH, LW, LBU, LHU, SB, SH, SW).foreach(e =>
         decoderService.add(e, Seq(MEMORY_LRSC -> False))
       )
       decoderService.add(
@@ -199,7 +241,7 @@ class DBusCachedPlugin(val config : DataCacheConfig,
     }
 
     if(withAmo){
-      List(LB, LH, LW, LBU, LHU, LWU, SB, SH, SW).foreach(e =>
+      List(LB, LH, LW, LBU, LHU, SB, SH, SW).foreach(e =>
         decoderService.add(e, Seq(MEMORY_AMO -> False))
       )
       val amoActions = storeActions.filter(_._1 != SRC2_CTRL) ++ Seq(
@@ -228,7 +270,8 @@ class DBusCachedPlugin(val config : DataCacheConfig,
 
     decoderService.addDefault(MEMORY_MANAGMENT, False)
     decoderService.add(MANAGEMENT, List(
-      MEMORY_MANAGMENT -> True
+      MEMORY_MANAGMENT -> True,
+      RS1_USE -> True
     ))
 
     withWriteResponse match {
@@ -236,6 +279,9 @@ class DBusCachedPlugin(val config : DataCacheConfig,
       case true => {
         decoderService.addDefault(MEMORY_FENCE, False)
         decoderService.add(FENCE, List(MEMORY_FENCE -> True))
+        decoderService.addDefault(MEMORY_FENCE_WR, False)
+        decoderService.add(FENCE_I, List(MEMORY_FENCE_WR -> True))
+        writesPending = Bool().setCompositeName(this, "writesPending")
       }
     }
 
@@ -343,6 +389,8 @@ class DBusCachedPlugin(val config : DataCacheConfig,
       }
 
       cache.io.cpu.flush.valid := arbitration.isValid && input(MEMORY_MANAGMENT)
+      cache.io.cpu.flush.singleLine := input(INSTRUCTION)(Riscv.rs1Range) =/= 0
+      cache.io.cpu.flush.lineId := U(input(RS1) >> log2Up(bytePerLine)).resized
       cache.io.cpu.execute.args.totalyConsistent := input(MEMORY_FORCE_CONSTISTENCY)
       arbitration.haltItself setWhen(cache.io.cpu.flush.isStall || cache.io.cpu.execute.haltIt)
 
@@ -368,8 +416,43 @@ class DBusCachedPlugin(val config : DataCacheConfig,
         insert(MEMORY_VIRTUAL_ADDRESS) := cache.io.cpu.execute.address
         memory.input(MEMORY_VIRTUAL_ADDRESS)
         if(writeBack != null) addPrePopTask( () =>
-          KeepAttribute(memory.input(MEMORY_VIRTUAL_ADDRESS).getDrivingReg)
+          KeepAttribute(memory.input(MEMORY_VIRTUAL_ADDRESS).getDrivingReg())
         )
+      }
+
+      if(withWriteResponse){
+        when(arbitration.isValid && input(MEMORY_FENCE_WR) && cache.io.cpu.writesPending){
+          arbitration.haltItself := True
+        }
+        writesPending := cache.io.cpu.writesPending
+      }
+
+      if(tightlyGen){
+        tightlyCoupledAddressStage match {
+          case false =>
+          case true => {
+            val go = RegInit(False) setWhen(arbitration.isValid) clearWhen(!arbitration.isStuck)
+            arbitration.haltItself.setWhen(arbitration.isValid && input(MEMORY_ENABLE) && input(MEMORY_TIGHTLY).orR && !go)
+          }
+        }
+
+        insert(MEMORY_TIGHTLY) := B(tightlyCoupledPorts.map(_.p.hit(input(SRC_ADD).asUInt)))
+        when(insert(MEMORY_TIGHTLY).orR){
+          cache.io.cpu.execute.isValid := False
+          arbitration.haltItself setWhen(stages.dropWhile(_ != execute).tail.map(s => s.arbitration.isValid && s.input(HAS_SIDE_EFFECT)).orR)
+        }
+        for((port, sel) <- (tightlyCoupledPorts, input(MEMORY_TIGHTLY).asBools).zipped){
+          port.bus.enable       := arbitration.isValid && input(MEMORY_ENABLE) && sel && !arbitration.isStuck
+
+          port.bus.address      := Delay(input(SRC_ADD), tightlyCoupledAddressStage.toInt).asUInt.resized
+          port.bus.write_enable := input(MEMORY_WR)
+          port.bus.write_data   := input(MEMORY_STORE_DATA_RF)
+          port.bus.write_mask   := size.mux (
+            U(0)    -> B"0001",
+            U(1)    -> B"0011",
+            default -> B"1111"
+          ) |<< port.bus.address(1 downto 0)
+        }
       }
     }
 
@@ -388,6 +471,14 @@ class DBusCachedPlugin(val config : DataCacheConfig,
       mmuBus.end := !arbitration.isStuck || arbitration.removeIt
       cache.io.cpu.memory.mmuRsp := mmuBus.rsp
       cache.io.cpu.memory.mmuRsp.isIoAccess setWhen(pipeline(DEBUG_BYPASS_CACHE) && !cache.io.cpu.memory.isWrite)
+
+      if(tightlyGen){
+        when(input(MEMORY_ENABLE) && input(MEMORY_TIGHTLY).orR){
+          cache.io.cpu.memory.isValid := False
+          input(HAS_SIDE_EFFECT) := False
+        }
+        insert(MEMORY_TIGHTLY_DATA) := OhMux(input(MEMORY_TIGHTLY), tightlyCoupledPorts.map(_.bus.read_data))
+        KeepAttribute(insert(MEMORY_TIGHTLY_DATA))      }
     }
 
     val managementStage = stages.last
@@ -420,7 +511,7 @@ class DBusCachedPlugin(val config : DataCacheConfig,
         }
 
         when(!input(MEMORY_FENCE) || !arbitration.isFiring){
-          cache.io.cpu.writeBack.fence.clearAll()
+          cache.io.cpu.writeBack.fence.clearFlags()
         }
 
         when(arbitration.isValid && (input(MEMORY_FENCE) || aquire)){
@@ -462,7 +553,8 @@ class DBusCachedPlugin(val config : DataCacheConfig,
 
       arbitration.haltItself.setWhen(cache.io.cpu.writeBack.isValid && cache.io.cpu.writeBack.haltIt)
 
-      val rspSplits = cache.io.cpu.writeBack.data.subdivideIn(8 bits)
+      val rspData = CombInit(cache.io.cpu.writeBack.data)
+      val rspSplits = rspData.subdivideIn(8 bits)
       val rspShifted = Bits(cpuDataWidth bits)
       //Generate minimal mux to move from a wide aligned memory read to the register file shifter representation
       for(i <- 0 until cpuDataWidth/8){
@@ -491,6 +583,16 @@ class DBusCachedPlugin(val config : DataCacheConfig,
       }
 
       insert(MEMORY_LOAD_DATA) := rspShifted
+
+      if(tightlyGen){
+        when(input(MEMORY_ENABLE) && input(MEMORY_TIGHTLY).orR){
+          cache.io.cpu.writeBack.isValid := False
+          exceptionBus.valid := False
+          redoBranch.valid := False
+          rspData := input(MEMORY_TIGHTLY_DATA)
+          input(HAS_SIDE_EFFECT) := False
+        }
+      }
     }
 
     //Share access to the dBus (used by self refilled MMU)
@@ -525,14 +627,14 @@ class DBusCachedPlugin(val config : DataCacheConfig,
       dBusAccess.rsp.error := cache.io.cpu.writeBack.unalignedAccess || cache.io.cpu.writeBack.accessError
       dBusAccess.rsp.redo := cache.io.cpu.redo
       component.addPrePopTask{() =>
-        managementStage.input(IS_DBUS_SHARING).getDrivingReg clearWhen(dBusAccess.rsp.fire)
+        managementStage.input(IS_DBUS_SHARING).getDrivingReg() clearWhen(dBusAccess.rsp.fire)
         when(forceDatapath){
           execute.output(REGFILE_WRITE_DATA) := dBusAccess.cmd.address.asBits
         }
         if(mmuAndBufferStage != execute) mmuAndBufferStage.input(IS_DBUS_SHARING) init(False)
         managementStage.input(IS_DBUS_SHARING) init(False)
         when(dBusAccess.rsp.valid){
-          managementStage.input(IS_DBUS_SHARING).getDrivingReg := False
+          managementStage.input(IS_DBUS_SHARING).getDrivingReg() := False
         }
       }
     }
@@ -549,3 +651,73 @@ class DBusCachedPlugin(val config : DataCacheConfig,
 }
 
 
+class IBusDBusCachedTightlyCoupledRam(mapping : SizeMapping,
+                                      withIBus : Boolean = true,
+                                      withDBus : Boolean = true,
+                                      ramAsBlackbox : Boolean = true,
+                                      hexInit :   String = null,
+                                      ramOffset : Long = -1) extends Plugin[VexRiscv]{
+  var dbus : TightlyCoupledDataBus = null
+  var ibus : TightlyCoupledBus = null
+
+  override def setup(pipeline: VexRiscv) = {
+    if(withDBus) {
+      dbus = pipeline.service(classOf[DBusCachedPlugin]).newTightlyCoupledPort(addr => mapping.hit(addr))
+      dbus.setCompositeName(this, "dbus").setAsDirectionLess()
+    }
+
+    if(withIBus){
+      ibus = pipeline.service(classOf[IBusCachedPlugin]).newTightlyCoupledPortV2(
+        TightlyCoupledPortParameter(
+          name = "tightlyCoupledIbus",
+          hit = addr => mapping.hit(addr)
+        )
+      )
+      ibus.setCompositeName(this, "ibus").setAsDirectionLess()
+    }
+  }
+
+  override def build(pipeline: VexRiscv) = {
+    val logic = pipeline plug new Area {
+      val ram = Mem(Bits(32 bits), mapping.size.toInt/4)
+      if(ramAsBlackbox) ram.generateAsBlackBox()
+      if (hexInit != null) {
+        assert(ramOffset != -1)
+        initRam(ram, hexInit, ramOffset, allowOverflow = true)
+      }
+      val d = withDBus generate new Area {
+        dbus.read_data := ram.readWriteSync(
+          address = (dbus.address >> 2).resized,
+          data    = dbus.write_data,
+          enable  = dbus.enable,
+          write   = dbus.write_enable,
+          mask    = dbus.write_mask
+        )
+      }
+      val i = withIBus generate new Area {
+        ibus.data := ram.readWriteSync(
+          address = (ibus.address >> 2).resized,
+          data    = B(32 bits, default -> False),
+          enable  = ibus.enable,
+          write   = False
+        )
+      }
+    }
+  }
+
+  //Until new SpinalHDL release
+  def initRam[T <: Data](ram: Mem[T], onChipRamHexFile: String, hexOffset: BigInt, allowOverflow: Boolean = false): Unit = {
+    val wordSize = ram.wordType.getBitsWidth / 8
+    val initContent = Array.fill[BigInt](ram.wordCount)(0)
+    HexTools.readHexFile(onChipRamHexFile, 0, (address, data) => {
+      val addressWithoutOffset = (address - hexOffset).toLong
+      val addressWord = addressWithoutOffset / wordSize
+      if (addressWord < 0 || addressWord >= initContent.size) {
+        assert(allowOverflow)
+      } else {
+        initContent(addressWord.toInt) |= BigInt(data) << ((addressWithoutOffset.toInt % wordSize) * 8)
+      }
+    })
+    ram.initBigInt(initContent)
+  }
+}

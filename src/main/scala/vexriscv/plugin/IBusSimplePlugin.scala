@@ -7,7 +7,7 @@ import spinal.lib.bus.amba3.ahblite.{AhbLite3, AhbLite3Config, AhbLite3Master}
 import spinal.lib.bus.amba4.axi._
 import spinal.lib.bus.avalon.{AvalonMM, AvalonMMConfig}
 import spinal.lib.bus.bmb.{Bmb, BmbParameter}
-import spinal.lib.bus.wishbone.{Wishbone, WishboneConfig}
+import spinal.lib.bus.wishbone.{AddressGranularity, Wishbone, WishboneConfig}
 import spinal.lib.bus.simple._
 import vexriscv.Riscv.{FENCE, FENCE_I}
 
@@ -60,7 +60,8 @@ object IBusSimpleBus{
     tgcWidth = 0,
     tgdWidth = 0,
     useBTE = true,
-    useCTI = true
+    useCTI = true,
+    addressGranularity = AddressGranularity.WORD
   )
 
   def getPipelinedMemoryBusConfig() = PipelinedMemoryBusConfig(
@@ -156,10 +157,10 @@ case class IBusSimpleBus(plugin: IBusSimplePlugin) extends Bundle with IMasterSl
     bus.STB := cmdPipe.valid
 
 
-    cmdPipe.ready := cmdPipe.valid && bus.ACK
-    rsp.valid := bus.CYC && bus.ACK
+    cmdPipe.ready := cmdPipe.valid && (bus.ACK || bus.ERR)
+    rsp.valid := bus.CYC && (bus.ACK || bus.ERR)
     rsp.inst := bus.DAT_MISO
-    rsp.error := False //TODO
+    rsp.error := bus.ERR
     bus
   }
 
@@ -371,6 +372,7 @@ class IBusSimplePlugin(    resetVector : BigInt,
         }
 
         val fetchRsp = FetchRsp()
+        fetchRsp.isRvc := False
         fetchRsp.pc := stages.last.output.payload
         fetchRsp.rsp := rspBuffer.output.payload
         fetchRsp.rsp.error.clearWhen(!rspBuffer.output.valid) //Avoid interference with instruction injection from the debug plugin

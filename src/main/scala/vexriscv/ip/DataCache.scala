@@ -6,7 +6,7 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi.{Axi4Config, Axi4Shared}
 import spinal.lib.bus.avalon.{AvalonMM, AvalonMMConfig}
 import spinal.lib.bus.bmb.{Bmb, BmbAccessParameter, BmbCmd, BmbInvalidationParameter, BmbParameter, BmbSourceParameter}
-import spinal.lib.bus.wishbone.{Wishbone, WishboneConfig}
+import spinal.lib.bus.wishbone.{AddressGranularity, Wishbone, WishboneConfig}
 import spinal.lib.bus.simple._
 import vexriscv.plugin.DBusSimpleBus
 
@@ -40,6 +40,7 @@ case class DataCacheConfig(cacheSize : Int,
   assert(isPow2(pendingMax))
   assert(rfDataWidth <= memDataWidth)
 
+  def lineCount = cacheSize/bytePerLine/wayCount
   def sizeMax = log2Up(bytePerLine)
   def sizeWidth = log2Up(sizeMax + 1)
   val aggregationWidth = if(withWriteAggregation) log2Up(memDataBytes+1) else 0
@@ -88,7 +89,8 @@ case class DataCacheConfig(cacheSize : Int,
     tgcWidth = 0,
     tgdWidth = 0,
     useBTE = true,
-    useCTI = true
+    useCTI = true,
+    addressGranularity = AddressGranularity.WORD
   )
 
   def getBmbParameter() = BmbParameter(
@@ -167,8 +169,9 @@ case class FenceFlags() extends Bundle {
   def forceAll(): Unit ={
     List(SW,SR,SO,SI,PW,PR,PO,PI).foreach(_ := True)
   }
-  def clearAll(): Unit ={
+  def clearFlags(): this.type ={
     List(SW,SR,SO,SI,PW,PR,PO,PI).foreach(_ := False)
+    this
   }
 }
 
@@ -193,20 +196,27 @@ case class DataCacheCpuWriteBack(p : DataCacheConfig) extends Bundle with IMaste
   }
 }
 
+case class DataCacheFlush(lineCount : Int) extends Bundle{
+  val singleLine = Bool()
+  val lineId = UInt(log2Up(lineCount) bits)
+}
+
 case class DataCacheCpuBus(p : DataCacheConfig, mmu : MemoryTranslatorBusParameter) extends Bundle with IMasterSlave{
   val execute   = DataCacheCpuExecute(p)
   val memory    = DataCacheCpuMemory(p, mmu)
   val writeBack = DataCacheCpuWriteBack(p)
 
   val redo = Bool()
-  val flush = Event
+  val flush = Stream(DataCacheFlush(p.lineCount))
+
+  val writesPending = Bool()
 
   override def asMaster(): Unit = {
     master(execute)
     master(memory)
     master(writeBack)
     master(flush)
-    in(redo)
+    in(redo, writesPending)
   }
 }
 
@@ -359,13 +369,13 @@ case class DataCacheMemBus(p : DataCacheConfig) extends Bundle with IMasterSlave
     bus.WE  := cmdBridge.wr
     bus.DAT_MOSI := cmdBridge.data
 
-    cmdBridge.ready := cmdBridge.valid && bus.ACK
+    cmdBridge.ready := cmdBridge.valid && (bus.ACK || bus.ERR)
     bus.CYC := cmdBridge.valid
     bus.STB := cmdBridge.valid
 
-    rsp.valid := RegNext(cmdBridge.valid && !bus.WE && bus.ACK) init(False)
+    rsp.valid := RegNext(cmdBridge.valid && !bus.WE && (bus.ACK || bus.ERR)) init(False)
     rsp.data  := RegNext(bus.DAT_MISO)
-    rsp.error := False //TODO
+    rsp.error := RegNext(bus.ERR)
     bus
   }
 
@@ -392,7 +402,7 @@ case class DataCacheMemBus(p : DataCacheConfig) extends Bundle with IMasterSlave
 
 
   def toBmb(syncPendingMax : Int = 32,
-            timeoutCycles : Int = 16) : Bmb = new Area{
+            timeoutCycles : Int = 32) : Bmb = new Area{
     setCompositeName(DataCacheMemBus.this, "Bridge", true)
     val pipelinedMemoryBusConfig = p.getBmbParameter()
     val bus = Bmb(pipelinedMemoryBusConfig).setCompositeName(this,"toBmb", true)
@@ -711,6 +721,8 @@ class DataCache(val p : DataCacheConfig, mmuParameter : MemoryTranslatorBusParam
       }
       val uncached = history.readAsync(rPtr.resized)
       val full = RegNext(wPtr - rPtr >= pendingMax-1)
+      val empty = wPtr === rPtr
+      io.cpu.writesPending := !empty
       io.cpu.execute.haltIt setWhen(full)
     }
 
@@ -849,6 +861,9 @@ class DataCache(val p : DataCacheConfig, mmuParameter : MemoryTranslatorBusParam
         io.cpu.execute.haltIt := True
         when(!hold) {
           counter := counter + 1
+          when(io.cpu.flush.valid && io.cpu.flush.singleLine){
+            counter.msb := True
+          }
         }
       }
 
@@ -860,6 +875,9 @@ class DataCache(val p : DataCacheConfig, mmuParameter : MemoryTranslatorBusParam
       when(start){
         waitDone := True
         counter := 0
+        when(io.cpu.flush.valid && io.cpu.flush.singleLine){
+          counter := U"0" @@ io.cpu.flush.lineId
+        }
       }
     }
 
@@ -1051,16 +1069,18 @@ class DataCache(val p : DataCacheConfig, mmuParameter : MemoryTranslatorBusParam
     }
 
     //remove side effects on exceptions
-    when(consistancyHazard || mmuRsp.refilling || io.cpu.writeBack.accessError || io.cpu.writeBack.mmuException || io.cpu.writeBack.unalignedAccess){
-      io.mem.cmd.valid := False
-      tagsWriteCmd.valid := False
-      dataWriteCmd.valid := False
-      loaderValid := False
-      io.cpu.writeBack.haltIt := False
-      if(withInternalLrSc) lrSc.reserved := lrSc.reserved
-      if(withExternalAmo) amo.external.state := LR_CMD
+    when(io.cpu.writeBack.isValid) {
+      when(consistancyHazard || mmuRsp.refilling || io.cpu.writeBack.accessError || io.cpu.writeBack.mmuException || io.cpu.writeBack.unalignedAccess) {
+        io.mem.cmd.valid := False
+        tagsWriteCmd.valid := False
+        dataWriteCmd.valid := False
+        loaderValid := False
+        io.cpu.writeBack.haltIt := False
+        if (withInternalLrSc) lrSc.reserved := lrSc.reserved
+        if (withExternalAmo) amo.external.state := LR_CMD
+      }
+      io.cpu.redo setWhen((mmuRsp.refilling || consistancyHazard))
     }
-    io.cpu.redo setWhen(io.cpu.writeBack.isValid && (mmuRsp.refilling || consistancyHazard))
 
     assert(!(io.cpu.writeBack.isValid && !io.cpu.writeBack.haltIt && io.cpu.writeBack.isStuck), "writeBack stuck by another plugin is not allowed", ERROR)
   }

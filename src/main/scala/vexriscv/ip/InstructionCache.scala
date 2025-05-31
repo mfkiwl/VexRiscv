@@ -6,7 +6,7 @@ import spinal.lib._
 import spinal.lib.bus.amba4.axi.{Axi4Config, Axi4ReadOnly}
 import spinal.lib.bus.avalon.{AvalonMM, AvalonMMConfig}
 import spinal.lib.bus.bmb.{Bmb, BmbAccessParameter, BmbParameter, BmbSourceParameter}
-import spinal.lib.bus.wishbone.{Wishbone, WishboneConfig}
+import spinal.lib.bus.wishbone.{AddressGranularity, Wishbone, WishboneConfig}
 import spinal.lib.bus.simple._
 import vexriscv.plugin.{IBusSimpleBus, IBusSimplePlugin}
 
@@ -67,7 +67,8 @@ case class InstructionCacheConfig( cacheSize : Int,
     tgcWidth = 0,
     tgdWidth = 0,
     useBTE = true,
-    useCTI = true
+    useCTI = true,
+    addressGranularity = AddressGranularity.WORD
   )
 
   def getBmbParameter() = BmbParameter(
@@ -239,15 +240,15 @@ case class InstructionCacheMemBus(p : InstructionCacheConfig) extends Bundle wit
     when(cmd.valid || pending){
       bus.CYC := True
       bus.STB := True
-      when(bus.ACK){
+      when(bus.ACK || bus.ERR){
         counter := counter + 1
       }
     }
 
-    cmd.ready := cmd.valid && bus.ACK
-    rsp.valid := RegNext(bus.CYC && bus.ACK) init(False)
+    cmd.ready := cmd.valid && (bus.ACK || bus.ERR)
+    rsp.valid := RegNext(bus.CYC && (bus.ACK || bus.ERR)) init(False)
     rsp.data := RegNext(bus.DAT_MISO)
-    rsp.error := False //TODO
+    rsp.error := RegNext(bus.ERR)
     bus
   }
 
